@@ -1,10 +1,9 @@
 #include <M5Stack.h>
 #include <NeoPixelBus.h>
 #include <Wire.h>
-#include <Preferences.h>
 #include <WiFi.h>
 #include <PubSubClient.h>
-#include "M5Bala.h"
+#include <M5Bala.h>
 
 // for wifi
 WiFiClient wifiClient;
@@ -12,22 +11,13 @@ const char* SSID = "955904991850_Extend";
 const char* PASSWORD = "58477850";
 
 // network
-const char* BROKER_IP = "192.168.100.50";
+const char* BROKER_IP = "192.168.100.93";
 
-Preferences preferences;
-
-M5Bala m5bala(Wire);
-
+// i2c cable
+TwoWire *wire;
 
 // command
 int command = 0;
-
-// // for servo
-// int RIGHT_SERVO_CH = 0;
-// int LEFT_SERVO_CH = 1;
-
-// int RIGHT_SERVO_PIN = 21;
-// int LEFT_SERVO_PIN = 22;
 
 // ==================== MQTT =====================
 const char *THING_NAME = "M5Stack";
@@ -40,8 +30,19 @@ void callback(char* topic, byte* payload, unsigned int length) {
   payload[length] = '\0';
   String buf_s = String((char*) payload);
   M5.Lcd.println(buf_s);
-    
-  command = buf_s.toInt();
+
+  if (buf_s == "w")
+  {
+    command = 1;
+  }else if (buf_s == "s"){
+    command = 2;
+  }else if (buf_s == "a"){
+    command = 3;
+  }else if (buf_s == "d"){
+    command = 4;
+  }else{
+    command = 0;
+  }
   M5.Lcd.printf("cmd:%d\n", command);
 }
 
@@ -57,15 +58,51 @@ void connectToBroker() {
 }
 
 /*=============================== */
+/* servo control */
+/*=============================== */
+void setMotor(int16_t pwm0, int16_t pwm1){
+	// Value range
+	int16_t m0 = constrain(pwm0, -255, 255);
+	int16_t m1 = constrain(pwm1, -255, 255);
+
+	// Dead zone
+	if (((m0 > 0) && (m0 < DEAD_ZONE)) || ((m0 < 0) && (m0 > -DEAD_ZONE))) m0 = 0;
+	if (((m1 > 0) && (m1 < DEAD_ZONE)) || ((m1 < 0) && (m1 > -DEAD_ZONE))) m1 = 0;
+
+	// Same value
+	static int16_t pre_m0, pre_m1;
+	if ((m0 == pre_m0) && (m1 == pre_m1))
+		return;
+	pre_m0 = m0;
+	pre_m1 = m1;
+
+	// Send I2C
+	wire->beginTransmission(M5GO_WHEEL_ADDR);
+	wire->write(MOTOR_CTRL_ADDR); // Motor ctrl reg addr
+	wire->write(((uint8_t*)&m0)[0]);
+	wire->write(((uint8_t*)&m0)[1]);
+	wire->write(((uint8_t*)&m1)[0]);
+	wire->write(((uint8_t*)&m1)[1]);
+	wire->endTransmission();
+}
+
+/*=============================== */
 /* setup */
 /*=============================== */
 void setup(void) {
 
+	// Power ON Stabilizing...
+  delay(500);
   M5.begin();
-  Serial.begin(115200);
+
+	// Init I2C
+	Wire.begin();
+	Wire.setClock(400000UL);  // Set I2C frequency to 400kHz
+	delay(500);
+
+  // Serial.begin(115200);
 
   // wifi connetction
-
   WiFi.begin(SSID, PASSWORD);
   M5.Lcd.println("Wait for WiFi... ");
 
@@ -81,20 +118,10 @@ void setup(void) {
   connectToBroker();
   M5.Lcd.println("success to connect MQTT broker");
 
-//   // PWMの設定
-//   ledcSetup(RIGHT_SERVO_CH, 50, 10); // チャネル, 周波数=50Hz, 分解能=0-1023
-//   ledcAttachPin(RIGHT_SERVO_PIN, RIGHT_SERVO_CH); // ピン番号, チャネル
-
-//   ledcSetup(LEFT_SERVO_CH, 50, 10); // チャネル, 周波数=50Hz, 分解能=0-1023
-//   ledcAttachPin(LEFT_SERVO_PIN, LEFT_SERVO_CH); // ピン番号, チャネル
+  wire = &Wire;
+  setMotor(0, 0);
 }
 
-/*=============================== */
-/* servo control */
-/*=============================== */
-void moveServo(int channel, int angle) {
-  ledcWrite(channel, map(angle, -90, 90, 26, 123));
-}
 
 /*=============================== */
 /* main loop */
@@ -102,11 +129,19 @@ void moveServo(int channel, int angle) {
 void loop() {
   mqttClient.loop();
 
-//   if (command == 1) {
-//     moveServo(RIGHT_SERVO_CH, -90);
-//     moveServo(LEFT_SERVO_CH, -90);
-//   } else if (command == 2) {
-//     moveServo(RIGHT_SERVO_CH, 90);
-//     moveServo(LEFT_SERVO_CH, 90);
-//   }
+  if (command == 1) {
+    setMotor(128, 128);
+  } else if (command == 2) {
+    setMotor(-128, -128);
+  } else if (command == 3) {
+    setMotor(128, -128);
+  } else if (command == 4) {
+    setMotor(-128, 128);
+  }else{
+    setMotor(0, 0);
+  }
+  Serial.printf("cmd: %d\n", command);
+
+	// M5 Loop
+	M5.update();
 }
